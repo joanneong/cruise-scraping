@@ -1,0 +1,8 @@
+# drivers
+chromedriver
+
+# virtual environment
+env/
+
+# macOS
+.DS_Store
