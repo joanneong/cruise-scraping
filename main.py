@@ -5,23 +5,28 @@ import calendar
 import datetime
 from email.mime.text import MIMEText
 import logging
+import os
 import re
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import smtplib
 import sys
 import time
 
+def lambda_handler(event, context):
+    main(is_running_locally=False)
+
 def get_input_args():
     """
     Gets values of input args from the user
     """
     parser = argparse.ArgumentParser(description='Scrape cruise site and send prices to a Gmail email')
-    parser.add_argument('--email', help='Gmail address, e.g. example@gmail.com')
-    parser.add_argument('--password', help='Password to Gmail address')
+    parser.add_argument('--email', help='Gmail address, e.g. example@gmail.com', default=os.environ.get('email'))
+    parser.add_argument('--password', help='Password to Gmail address', default=os.environ.get('password'))
     args = parser.parse_args()
 
     if args.email is None:
@@ -34,11 +39,24 @@ def get_input_args():
 
     return args.email, args.password
 
-def get_cruise_prices_html():
+def get_cruise_prices_html(is_running_locally):
     """
     Gets relevant HTML from the cruise page using Selenium
     """
-    browser = webdriver.Chrome('./chromedriver')
+    if is_running_locally:
+         # Use later version of Chromedriver when running locally because local version of
+         # Chrome is later
+        browser = webdriver.Chrome('./chromedriver')
+    else:
+        # Otherwise, use earlier version of Chromedriver (2.43) to match earlier version of
+        # severless Chromium (matching https://github.com/adieuadieu/serverless-chrome/releases/download/v1.0.0-55/stable-headless-chromium-amazonlinux-2017-03.zip)
+        options = Options()
+        options.binary_location = '/opt/headless-chromium'
+        options.add_argument('--headless')
+        options.add_argument('--disable-dev-shm-usage')
+
+        browser = webdriver.Chrome('/opt/chromedriver', options=options)
+
     browser.get('https://sg.dreamcruiseline.com/swift/cruise?lang=1&siid=281788&departureports=SIN&ship=14101')
 
     try:
@@ -125,9 +143,9 @@ def send_email_to_gmail(html_content, email, password):
     except Exception as e:
         print('Failed to send email: ' + repr(e))
 
-def main():
+def main(is_running_locally=True):
     email, password = get_input_args()
-    cruise_list_container_html = get_cruise_prices_html()
+    cruise_list_container_html = get_cruise_prices_html(is_running_locally)
     price_table = get_price_table_from_html(cruise_list_container_html)
     send_email_to_gmail(price_table, email, password)
 

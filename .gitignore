@@ -1,5 +1,8 @@
-# drivers
+# scraping tools
 chromedriver
+headless-chromium
+
+aws-deployment/
 
 # virtual environment
 env/
