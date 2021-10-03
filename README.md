@@ -162,9 +162,10 @@ To test the Docker image locally:
     ```
 
 3. We can also enter the Docker container to see its contents:
-```
-docker exec -it <container-id> /bin/bash
-```
+
+    ```
+    docker exec -it <container-id> /bin/bash
+    ```
 
     and show the chrome debug logs:
     ```
