@@ -4,7 +4,6 @@ from bs4 import Comment
 import calendar
 import datetime
 from email.mime.text import MIMEText
-import logging
 import os
 import re
 from selenium import webdriver
@@ -27,6 +26,8 @@ def get_input_args():
     parser = argparse.ArgumentParser(description='Scrape cruise site and send prices to a Gmail email')
     parser.add_argument('--email', help='Gmail address, e.g. example@gmail.com', default=os.environ.get('email'))
     parser.add_argument('--password', help='Password to Gmail address', default=os.environ.get('password'))
+    parser.add_argument('--delay', help='Amount of time (in seconds) to wait for webpage to load', default=os.environ.get('delay'))
+    parser.add_argument('--target', help='Target class name used for checking whether page is fully loaded', default=os.environ.get('target'))
     args = parser.parse_args()
 
     if args.email is None:
@@ -36,10 +37,18 @@ def get_input_args():
     if args.password is None:
         print('ERROR! Please provide the corresponding password to your email address. Use -h to see more help information.')
         sys.exit()
+    
+    if args.delay is None:
+        args.delay = 10
+        print(f'No delay provided by the user. Defaulting to {args.delay} seconds...')
+    
+    if args.target is None:
+        args.target = 'cruise-list-container'
+        print(f'No target provided by user. Defaulting to {args.target}...')
 
-    return args.email, args.password
+    return args.email, args.password, args.delay, args.target
 
-def get_cruise_prices_html(is_running_locally):
+def get_cruise_prices_html(is_running_locally, delay, target):
     """
     Gets relevant HTML from the cruise page using Selenium
     """
@@ -52,18 +61,46 @@ def get_cruise_prices_html(is_running_locally):
         # severless Chromium (matching https://github.com/adieuadieu/serverless-chrome/releases/download/v1.0.0-55/stable-headless-chromium-amazonlinux-2017-03.zip)
         options = Options()
         options.binary_location = '/opt/headless-chromium'
+
+        # remove privileges from processes that do not need them so that it works with AWS Lambda
+        options.add_argument('--no-sandbox')
+
+        # run without GUI to reduce memory overhead
         options.add_argument('--headless')
+
+        # Chrome should not use /dev/shm folder as a temp folder for internal memory management as its size is limited in Docker
         options.add_argument('--disable-dev-shm-usage')
+
+        # counter for error message "Failed to load /opt/libosmesa.so" during init
+        options.add_argument('--disable-gpu')
+
+        # ensure that desktop site is loaded instead of mobile site etc.
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--start-maximized')
+
+        # add locale so that page can load, otherwise you will see warning message "locale_file_path.empty() for locale"
+        options.add_argument('--lang=en')
+
+        # other misc settings recommended in https://stackoverflow.com/questions/60229291/aws-lambda-ruby-crawler-selenium-chrome-driver-unknown-error-unable-to-discov
+        options.add_argument('--disable-application-cache') 
+        options.add_argument('--disable-infobars')
+        options.add_argument('--hide-scrollbars') 
+        options.add_argument('--enable-logging')
+        options.add_argument('--single-process')
 
         browser = webdriver.Chrome('/opt/chromedriver', options=options)
 
+    # For some reason the siid is always the same
     browser.get('https://sg.dreamcruiseline.com/swift/cruise?lang=1&siid=281788&departureports=SIN&ship=14101')
 
     try:
         # wait for a few seconds to ensure elements by AJAX are also loaded
-        element = WebDriverWait(browser, 10).until(EC.presence_of_element_located((By.CLASS_NAME, 'cruise-list-container')))
+        element = WebDriverWait(browser, int(delay)).until(EC.presence_of_element_located((By.CLASS_NAME, f'{target}')))
     except TimeoutException:
         print(f'TimeoutException: loading the page took more than {delay} seconds!')
+        browser.get_screenshot_as_file('screenshot.png')
+        browser.close()
+        sys.exit()
 
     # expand all listings
     view_all_links = browser.find_elements_by_partial_link_text('View All')
@@ -94,7 +131,7 @@ def get_price_table_from_html(cruise_list_container_html):
     for cruise_item_component in cruise_item_components:
         num_of_nights = cruise_item_component.select('.cruise-title > span.text-gradient')[0].get_text()
         parsed_html.append(f'<h3>{num_of_nights}</h3>')
-        parsed_html.append('<table><thead><tr><th>Date</th><th>Day</th><th>Balcony</th><th>Suite</th></tr></thead>')
+        parsed_html.append('<table><thead><tr><th>Date</th><th>Day</th><th>Interior</th><th>Oceanview</th><th>Balcony</th><th>Suite</th></tr></thead>')
         parsed_html.append('<tbody>')
         table_rows = cruise_item_component.select('tbody > tr')
         for table_row in table_rows:
@@ -144,9 +181,16 @@ def send_email_to_gmail(html_content, email, password):
         print('Failed to send email: ' + repr(e))
 
 def main(is_running_locally=True):
-    email, password = get_input_args()
-    cruise_list_container_html = get_cruise_prices_html(is_running_locally)
+    print('Getting input args...')
+    email, password, delay, target = get_input_args()
+
+    print(f'Getting cruise prices HTML with delay: {delay} and target: {target}...')
+    cruise_list_container_html = get_cruise_prices_html(is_running_locally, delay, target)
+
+    print('Getting price table from HTML...')
     price_table = get_price_table_from_html(cruise_list_container_html)
+
+    print('Sending email to Gmail...')
     send_email_to_gmail(price_table, email, password)
 
 if __name__ == "__main__":
